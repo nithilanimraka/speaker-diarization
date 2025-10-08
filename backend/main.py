@@ -7,6 +7,7 @@ from google.cloud.speech import SpeechAsyncClient
 from google.cloud import speech
 import logging
 import os
+import time
 
 try:
     import webrtcvad 
@@ -41,7 +42,7 @@ config = speech.RecognitionConfig(
     diarization_config=diarization_config,
     enable_automatic_punctuation=True,
     use_enhanced=True,
-    model="phone_call",
+    model="video",
     enable_word_time_offsets=True,
 )
 
@@ -64,7 +65,7 @@ async def websocket_endpoint(websocket: WebSocket):
         frame_bytes = int(sample_rate_hz * frame_ms / 1000) * bytes_per_sample
 
         use_vad = bool(int(os.getenv("VAD_ENABLED", "1")))
-        vad_aggressiveness = int(os.getenv("VAD_AGGRESSIVENESS", "3"))  # 0-3
+        vad_aggressiveness = int(os.getenv("VAD_AGGRESSIVENESS", "2"))  # 0-3
         preroll_ms = int(os.getenv("VAD_PREROLL_MS", "150"))
         hangover_ms = int(os.getenv("VAD_HANGOVER_MS", "400"))
 
@@ -92,9 +93,18 @@ async def websocket_endpoint(websocket: WebSocket):
         unvoiced_count = 0
 
         try:
+            # Use receive timeout to inject keepalive during long silence
+            recv_timeout_sec = max(0.02, frame_ms / 1000)
+            zero_frame = b"\x00" * frame_bytes
             while True:
-                chunk = await websocket.receive_bytes()
-                buffer.extend(chunk)
+                try:
+                    chunk = await asyncio.wait_for(websocket.receive_bytes(), timeout=recv_timeout_sec)
+                    buffer.extend(chunk)
+                except asyncio.TimeoutError:
+                    # No data from client within timeout; if not in speech, send a keepalive zero frame
+                    if not speech_active:
+                        yield speech.StreamingRecognizeRequest(audio_content=zero_frame)
+                    continue
 
                 while len(buffer) >= frame_bytes:
                     frame = bytes(buffer[:frame_bytes])
@@ -132,7 +142,7 @@ async def websocket_endpoint(websocket: WebSocket):
         requests = request_generator()
         responses = await client.streaming_recognize(requests=requests)
 
-        prev_speaker_tag = None
+        # Using per-result majority vote only (no cross-result confirmation)
         async for response in responses:
             for result in response.results:
                 if result.is_final:
@@ -143,6 +153,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     transcript = result.alternatives[0].transcript
 
                     # Majority vote over word-level speaker_tag within this final segment
+                    # with extra weight on trailing words to stabilize speaker at segment end
                     tag_counts = {}
                     for w in words:
                         tag = getattr(w, 'speaker_tag', None)
@@ -150,27 +161,23 @@ async def websocket_endpoint(websocket: WebSocket):
                             continue
                         tag_counts[tag] = tag_counts.get(tag, 0) + 1
 
+                    # Tail weighting: last N words get additional weight (e.g., count double)
+                    tail_words = int(os.getenv("VOTE_TAIL_WORDS", "5"))
+                    tail_weight = int(os.getenv("VOTE_TAIL_WEIGHT", "2"))
+                    if tail_weight > 1 and tail_words > 0:
+                        start_idx = max(0, len(words) - tail_words)
+                        for w in words[start_idx:]:
+                            tag = getattr(w, 'speaker_tag', None)
+                            if tag is None:
+                                continue
+                            # add (tail_weight - 1) so total equals base 1 + extra
+                            tag_counts[tag] = tag_counts.get(tag, 0) + (tail_weight - 1)
+
                     if not tag_counts:
                         continue
 
-                    candidate_tag = max(tag_counts.items(), key=lambda kv: kv[1])[0]
-
-                    # Hysteresis smoothing: avoid switching on very short runs
-                    # Count how many trailing words belong to the candidate tag
-                    tail_run = 0
-                    for w in reversed(words):
-                        if getattr(w, 'speaker_tag', None) == candidate_tag:
-                            tail_run += 1
-                        else:
-                            break
-
-                    # If switch is attempted but tail run is short, keep previous speaker
-                    min_switch_words = 3
-                    if prev_speaker_tag is not None and candidate_tag != prev_speaker_tag and tail_run < min_switch_words:
-                        speaker_tag = prev_speaker_tag
-                    else:
-                        speaker_tag = candidate_tag
-                        prev_speaker_tag = speaker_tag
+                    # Per-result majority winner
+                    speaker_tag = max(tag_counts.items(), key=lambda kv: kv[1])[0]
 
                     logging.info(f"Sending final transcript: Tag {speaker_tag} - {transcript}")
 

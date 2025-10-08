@@ -22,7 +22,6 @@ function App() {
 
     setTranscript([]);
     setSpeakerMap({});
-    // We no longer need the firstSpeakerTag.current ref
     
     try {
       ws.current = new WebSocket('ws://localhost:8000/ws');
@@ -33,27 +32,13 @@ function App() {
         if (data.is_final) {
           const tag = data.speaker_tag;
 
-          // --- FINAL, MORE ROBUST LOGIC ---
+          // Stable diarization-only mapping: first unique tag -> User, second -> AI Agent; do not flip
           setSpeakerMap(prevMap => {
-            // If this speaker tag is already known, do nothing.
-            if (prevMap[tag]) {
-              return prevMap;
-            }
-            
-            // If the map of speakers is empty, this is the first speaker.
-            // Assign them as "User".
-            if (Object.keys(prevMap).length === 0) {
-              return { ...prevMap, [tag]: 'User' };
-            }
-
-            // If the map has one speaker, this must be the second.
-            // Assign them as "AI Agent".
-            if (Object.keys(prevMap).length === 1) {
-              return { ...prevMap, [tag]: 'AI Agent' };
-            }
-
-            // If more than 2 speakers are somehow detected, do nothing.
-            return prevMap;
+            if (prevMap[tag]) return prevMap;
+            const next = { ...prevMap };
+            if (!Object.values(next).includes('User')) next[tag] = 'User';
+            else if (!Object.values(next).includes('AI Agent')) next[tag] = 'AI Agent';
+            return next;
           });
 
           setTranscript(prev => [...prev, { speaker_tag: tag, text: data.transcript }]);
@@ -129,7 +114,7 @@ function App() {
         <div className="transcript-container">
           {transcript.map((line, index) => {
             const label = getSpeakerLabel(line.speaker_tag);
-            const labelClass = (speakerMap[line.speaker_tag] || '').replace(' ', '').toLowerCase();
+            const labelClass = (label || '').replace(' ', '').toLowerCase();
             return (
               <p key={index} className={labelClass}>
                 <strong>{label}:</strong> {line.text}
