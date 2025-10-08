@@ -95,7 +95,7 @@ async def websocket_endpoint(websocket: WebSocket):
             # Use receive timeout to inject keepalive during long silence
             recv_timeout_sec = max(0.02, frame_ms / 1000)
             zero_frame = b"\x00" * frame_bytes
-            keepalive_ms = int(os.getenv("SILENCE_KEEPALIVE_MS", "1000"))
+            keepalive_ms = int(os.getenv("SILENCE_KEEPALIVE_MS", "250"))
             last_client_data_ts = time.monotonic()
             while True:
                 try:
@@ -236,6 +236,13 @@ async def websocket_endpoint(websocket: WebSocket):
                         )
                     except Exception:
                         pass
+
+                    # Send interim results for real-time feedback
+                    if websocket.client_state == WebSocketState.CONNECTED:
+                        await websocket.send_json({
+                            "transcript": transcript,
+                            "is_final": False
+                        })
 
                     logging.info(f"Sending final transcript: Tag {speaker_tag} - {transcript}")
 

@@ -4,12 +4,15 @@ import './App.css';
 function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState([]);
+  const [interimTranscript, setInterimTranscript] = useState('');
   const [speakerMap, setSpeakerMap] = useState({});
   const firstSpeakerTag = useRef(null);
   const ws = useRef(null);
   const audioContext = useRef(null);
   const processor = useRef(null);
   const stream = useRef(null);
+  const lastSendAtRef = useRef(0);
+  const KEEPALIVE_MS = 200;
 
 
   const getSpeakerLabel = (tag) => {
@@ -20,6 +23,7 @@ function App() {
     if (isRecording) return;
 
     setTranscript([]);
+    setInterimTranscript('');
     setSpeakerMap({});
     
     try {
@@ -41,6 +45,10 @@ function App() {
           });
 
           setTranscript(prev => [...prev, { speaker_tag: tag, text: data.transcript }]);
+          setInterimTranscript(''); // Clear interim when final arrives
+        } else if (data.transcript) {
+          // Interim result - show partial transcript
+          setInterimTranscript(data.transcript);
         }
       };
       
@@ -58,22 +66,39 @@ function App() {
       });
       audioContext.current = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
       const source = audioContext.current.createMediaStreamSource(stream.current);
+
       processor.current = audioContext.current.createScriptProcessor(4096, 1, 1);
       processor.current.onaudioprocess = (e) => {
         const inputData = e.inputBuffer.getChannelData(0);
         const pcmData = new Int16Array(inputData.length);
         for (let i = 0; i < inputData.length; i++) {
-            let s = inputData[i];
-            if (s > 1) s = 1;
-            if (s < -1) s = -1;
-            pcmData[i] = s * 32767;
+          let s = inputData[i];
+          if (s > 1) s = 1;
+          if (s < -1) s = -1;
+          pcmData[i] = s * 32767;
         }
         if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-            ws.current.send(pcmData.buffer);
+          ws.current.send(pcmData.buffer);
+          lastSendAtRef.current = performance.now();
         }
       };
+
       source.connect(processor.current);
       processor.current.connect(audioContext.current.destination);
+
+      // Lightweight keepalive loop
+      const keepalive = () => {
+        if (!isRecording) return;
+        const now = performance.now();
+        if (ws.current && ws.current.readyState === WebSocket.OPEN && now - lastSendAtRef.current > KEEPALIVE_MS) {
+          const zero = new Int16Array(160); // ~10ms at 16k mono
+          ws.current.send(zero.buffer);
+          lastSendAtRef.current = now;
+        }
+        requestAnimationFrame(keepalive);
+      };
+      lastSendAtRef.current = performance.now();
+      requestAnimationFrame(keepalive);
     } catch (error) {
       console.error("Error starting recording:", error);
       alert("Could not start recording. Please ensure you have given microphone permissions.");
@@ -119,6 +144,11 @@ function App() {
               </p>
             );
           })}
+          {interimTranscript && (
+            <p style={{ opacity: 0.7, fontStyle: 'italic' }}>
+              <strong>Listening:</strong> {interimTranscript}
+            </p>
+          )}
         </div>
       </header>
     </div>
