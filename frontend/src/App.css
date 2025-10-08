@@ -1,0 +1,63 @@
+/* src/App.css */
+.App-header {
+  background-color: #282c34;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(10px + 2vmin);
+  color: white;
+}
+.button-container button {
+  font-size: 1.2rem;
+  padding: 10px 20px;
+  margin: 10px;
+  cursor: pointer;
+}
+.transcript-container {
+  margin-top: 20px;
+  width: 80%;
+  max-width: 800px;
+  text-align: left;
+  background-color: #454c5a;
+  padding: 20px;
+  border-radius: 8px;
+}
+.speaker1 { color: #61dafb; }
+.speaker2 { color: #f3a683; }
+
+.user { color: #61dafb; }
+.aiagent { color: #f3a683; }
+
+.speaker-assignment {
+  background: #3a404c;
+  padding: 15px;
+  border-radius: 8px;
+  margin: 20px 0;
+  width: 80%;
+  max-width: 800px;
+}
+
+.speaker-assignment h3 {
+  margin-top: 0;
+  text-align: center;
+}
+
+.assignment-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.speaker-label {
+  font-weight: bold;
+}
+
+.assignment-buttons button {
+  font-size: 0.8rem;
+  padding: 4px 8px;
+  margin-left: 10px;
+  cursor: pointer;
+}
