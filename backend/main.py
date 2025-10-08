@@ -153,25 +153,12 @@ async def websocket_endpoint(websocket: WebSocket):
                     transcript = result.alternatives[0].transcript
 
                     # Majority vote over word-level speaker_tag within this final segment
-                    # with extra weight on trailing words to stabilize speaker at segment end
                     tag_counts = {}
                     for w in words:
                         tag = getattr(w, 'speaker_tag', None)
                         if tag is None:
                             continue
                         tag_counts[tag] = tag_counts.get(tag, 0) + 1
-
-                    # Tail weighting: last N words get additional weight (e.g., count double)
-                    tail_words = int(os.getenv("VOTE_TAIL_WORDS", "5"))
-                    tail_weight = int(os.getenv("VOTE_TAIL_WEIGHT", "2"))
-                    if tail_weight > 1 and tail_words > 0:
-                        start_idx = max(0, len(words) - tail_words)
-                        for w in words[start_idx:]:
-                            tag = getattr(w, 'speaker_tag', None)
-                            if tag is None:
-                                continue
-                            # add (tail_weight - 1) so total equals base 1 + extra
-                            tag_counts[tag] = tag_counts.get(tag, 0) + (tail_weight - 1)
 
                     if not tag_counts:
                         continue
