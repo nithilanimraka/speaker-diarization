@@ -96,13 +96,16 @@ async def websocket_endpoint(websocket: WebSocket):
             # Use receive timeout to inject keepalive during long silence
             recv_timeout_sec = max(0.02, frame_ms / 1000)
             zero_frame = b"\x00" * frame_bytes
+            keepalive_ms = int(os.getenv("SILENCE_KEEPALIVE_MS", "1000"))
+            last_client_data_ts = time.monotonic()
             while True:
                 try:
                     chunk = await asyncio.wait_for(websocket.receive_bytes(), timeout=recv_timeout_sec)
                     buffer.extend(chunk)
+                    last_client_data_ts = time.monotonic()
                 except asyncio.TimeoutError:
-                    # No data from client within timeout; if not in speech, send a keepalive zero frame
-                    if not speech_active:
+                    # No data from client; if not in speech and exceeded keepalive interval, send a zero frame
+                    if not speech_active and (time.monotonic() - last_client_data_ts) * 1000 >= keepalive_ms:
                         yield speech.StreamingRecognizeRequest(audio_content=zero_frame)
                     continue
 
@@ -143,6 +146,8 @@ async def websocket_endpoint(websocket: WebSocket):
         responses = await client.streaming_recognize(requests=requests)
 
         # Using per-result majority vote only (no cross-result confirmation)
+        # Track last max word end time to avoid emitting duplicate finals
+        last_max_word_end_ns = None
         async for response in responses:
             for result in response.results:
                 if result.is_final:
@@ -152,7 +157,31 @@ async def websocket_endpoint(websocket: WebSocket):
                     words = result.alternatives[0].words
                     transcript = result.alternatives[0].transcript
 
+                    # Skip empty/whitespace transcripts
+                    if not transcript or not transcript.strip():
+                        continue
+
+                    # Skip duplicates: if max end time hasn't advanced, this is likely a repeated final
+                    try:
+                        def to_ns(d):
+                            # d is a Duration with seconds and nanos
+                            return int(getattr(d, 'seconds', 0)) * 1_000_000_000 + int(getattr(d, 'nanos', 0))
+
+                        current_max_end_ns = max(
+                            [to_ns(getattr(w, 'end_time', None)) for w in words if getattr(w, 'end_time', None) is not None] or [None]
+                        )
+                        if current_max_end_ns is not None and last_max_word_end_ns is not None and current_max_end_ns <= last_max_word_end_ns:
+                            continue
+                        if current_max_end_ns is not None:
+                            last_max_word_end_ns = current_max_end_ns
+                    except Exception:
+                        pass
+
+                    # Prepare per-word tag sequence for readable logging later
+                    tags_sequence = [getattr(w, 'speaker_tag', None) for w in words]
+
                     # Majority vote over word-level speaker_tag within this final segment
+                    # with extra weight on trailing words to stabilize speaker at segment end
                     tag_counts = {}
                     for w in words:
                         tag = getattr(w, 'speaker_tag', None)
@@ -160,11 +189,54 @@ async def websocket_endpoint(websocket: WebSocket):
                             continue
                         tag_counts[tag] = tag_counts.get(tag, 0) + 1
 
+                    pre_weight_counts = dict(tag_counts)
+
+                    # Tail weighting: last N words get additional weight (e.g., count double)
+                    tail_words = int(os.getenv("VOTE_TAIL_WORDS", "5"))
+                    tail_weight = int(os.getenv("VOTE_TAIL_WEIGHT", "2"))
+                    if tail_weight > 1 and tail_words > 0:
+                        start_idx = max(0, len(words) - tail_words)
+                        for w in words[start_idx:]:
+                            tag = getattr(w, 'speaker_tag', None)
+                            if tag is None:
+                                continue
+                            # add (tail_weight - 1) so total equals base 1 + extra
+                            tag_counts[tag] = tag_counts.get(tag, 0) + (tail_weight - 1)
+
+                    # We'll log a readable block after choosing the speaker_tag
+
                     if not tag_counts:
                         continue
 
                     # Per-result majority winner
                     speaker_tag = max(tag_counts.items(), key=lambda kv: kv[1])[0]
+
+                    # Pretty segment log: transcript, per-word tags spaced, counts (pre/weighted), and chosen tag
+                    try:
+                        # chunk tags into readable rows
+                        chunk_size = 32
+                        tag_rows = [
+                            " ".join(str(t) for t in tags_sequence[i:i+chunk_size])
+                            for i in range(0, len(tags_sequence), chunk_size)
+                        ]
+                        logging.info(
+                            "\n==== Diarization Segment ====\n"
+                            "Transcript: %s\n"
+                            "Tags (by word):\n  %s\n"
+                            "Counts (pre-weight): %s\n"
+                            "Counts (weighted, last %d x%d): %s\n"
+                            "Chosen speaker_tag: %s\n"
+                            "============================\n",
+                            transcript,
+                            "\n  ".join(tag_rows) if tag_rows else "",
+                            pre_weight_counts,
+                            tail_words,
+                            tail_weight,
+                            tag_counts,
+                            speaker_tag,
+                        )
+                    except Exception:
+                        pass
 
                     logging.info(f"Sending final transcript: Tag {speaker_tag} - {transcript}")
 
