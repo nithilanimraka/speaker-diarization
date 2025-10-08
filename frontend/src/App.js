@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import './App.css';
 
 function App() {
-  // ... (keep useState, useRef, useEffect hooks as they are) ...
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState([]);
   const [speakerMap, setSpeakerMap] = useState({});
@@ -32,7 +31,7 @@ function App() {
         if (data.is_final) {
           const tag = data.speaker_tag;
 
-          // Stable diarization-only mapping: first unique tag -> User, second -> AI Agent; do not flip
+          // Stable diarization-only mapping
           setSpeakerMap(prevMap => {
             if (prevMap[tag]) return prevMap;
             const next = { ...prevMap };
@@ -48,7 +47,6 @@ function App() {
       ws.current.onclose = () => console.log("WebSocket connection closed");
       ws.current.onerror = (error) => console.error("WebSocket error:", error);
 
-      // ... (the rest of the function for getting audio media is the same) ...
       stream.current = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -106,7 +104,7 @@ function App() {
           <button onClick={startRecording} disabled={isRecording}>Start</button>
           <button onClick={stopRecording} disabled={!isRecording}>Stop</button>
         </div>
-        <audio src="YOUR_MP3_URL_HERE.mp3" controls loop>
+        <audio src="/agent.wav" controls loop>
             Your browser does not support the audio element.
         </audio>
         <p>Play the audio to simulate the AI agent's voice.</p>

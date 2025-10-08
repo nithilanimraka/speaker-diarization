@@ -1,4 +1,3 @@
-# main.py (Fully Asynchronous)
 import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,7 +10,7 @@ import time
 
 try:
     import webrtcvad 
-except Exception:  # pragma: no cover
+except Exception:  
     webrtcvad = None
 
 logging.basicConfig(level=logging.INFO)
@@ -60,7 +59,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
         # Audio/VAD parameters
         sample_rate_hz = 16000
-        frame_ms = 30  # Allowed by WebRTC VAD: 10, 20, 30ms
+        frame_ms = 30 
         bytes_per_sample = 2  # 16-bit PCM
         frame_bytes = int(sample_rate_hz * frame_ms / 1000) * bytes_per_sample
 
@@ -240,7 +239,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
                     logging.info(f"Sending final transcript: Tag {speaker_tag} - {transcript}")
 
-                    # --- THIS IS THE ONLY CHANGE ---
                     # Send the raw speaker_tag, not a pre-determined label
                     if websocket.client_state == WebSocketState.CONNECTED:
                         await websocket.send_json({
